@@ -1,0 +1,257 @@
+{
+  "name": "DocuForge AI (Docker Final v2)",
+  "nodes": [
+    {
+      "id": "a6c8190d-f71a-406e-adeb-f8282eb7c4e9",
+      "name": "Webhook - Script Input",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        200,
+        300
+      ],
+      "parameters": {
+        "path": "docuforge-webhook",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "credentials": null
+    },
+    {
+      "id": "23887597-02cb-4e2e-8655-4ee45d47ad90",
+      "name": "Analyze Script",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        400,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst script = $input.item.json.body?.script || $input.item.json.query?.script;\nif (!script || script.length < 10) throw new Error(\"Script too short\");\nconst sentences = script.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 5);\nconst scenes = sentences.map((s, i) => ({\n    sceneId: i + 1,\n    text: s,\n    keywords: s.split(' ').slice(0, 5).join(' '),\n    duration: Math.ceil(s.split(' ').length / 2)\n}));\nreturn { json: { projectId: `proj_${Date.now()}`, scenes, totalScenes: scenes.length } };\n"
+      },
+      "credentials": null
+    },
+    {
+      "id": "543b745a-690e-4e48-a842-51855f2c4487",
+      "name": "Split Into Scenes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        600,
+        300
+      ],
+      "parameters": {
+        "jsCode": "return $input.item.json.scenes.map(scene => ({ json: scene }));"
+      },
+      "credentials": null
+    },
+    {
+      "id": "81d62906-c967-46a4-8800-868fc39a4c3d",
+      "name": "Search Pexels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        800,
+        300
+      ],
+      "parameters": {
+        "url": "https://api.pexels.com/videos/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.keywords }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "pexels-key",
+          "name": "Pexels API"
+        }
+      }
+    },
+    {
+      "id": "f6a4101c-9a7c-4c05-9799-ae314349fd66",
+      "name": "Process Pexels",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "jsCode": "\nconst videos = $input.item.json.videos || [];\nif (videos.length === 0) return { json: { error: \"No videos\" } };\nreturn { json: { \n    videoUrl: videos[0].video_files[0].link,\n    thumbnail: videos[0].image,\n    sceneId: $('Split Into Scenes').item.json.sceneId\n}};\n"
+      },
+      "credentials": null
+    },
+    {
+      "id": "bdffc2e8-e36c-414e-a882-4b1fc892deb8",
+      "name": "Rank Clips (Bridge)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5001/rank",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $input.all() }}"
+      },
+      "credentials": null
+    },
+    {
+      "id": "3ef99b7d-3f1e-49ac-bc44-29a549c01438",
+      "name": "Generate Voiceover",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1400,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5001/voiceover",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}"
+      },
+      "credentials": null
+    },
+    {
+      "id": "d836d177-bb86-438b-99c4-8d956da53020",
+      "name": "Assemble Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        1600,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5001/assemble",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}"
+      },
+      "credentials": null
+    },
+    {
+      "id": "f9bc2202-8a93-4895-bd0b-41d5c106bb61",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1800,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'done', video: $json.outputPath }) }}"
+      },
+      "credentials": null
+    }
+  ],
+  "connections": {
+    "Webhook - Script Input": {
+      "main": [
+        [
+          {
+            "node": "Analyze Script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Script": {
+      "main": [
+        [
+          {
+            "node": "Split Into Scenes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Into Scenes": {
+      "main": [
+        [
+          {
+            "node": "Search Pexels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Pexels": {
+      "main": [
+        [
+          {
+            "node": "Process Pexels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Pexels": {
+      "main": [
+        [
+          {
+            "node": "Rank Clips (Bridge)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rank Clips (Bridge)": {
+      "main": [
+        [
+          {
+            "node": "Generate Voiceover",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Voiceover": {
+      "main": [
+        [
+          {
+            "node": "Assemble Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Video": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null
+}

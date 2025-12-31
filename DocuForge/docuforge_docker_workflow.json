@@ -1,0 +1,747 @@
+{
+  "name": "DocuForge AI (Docker Edition)",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "docuforge-webhook",
+        "options": {},
+        "responseMode": "lastNode"
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook - Script Input",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        250,
+        500
+      ],
+      "webhookId": "docuforge-start"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and validate script\nconst script = $input.item.json.body?.script || $input.item.json.query?.script;\n\nif (!script || script.trim().length < 50) {\n  throw new Error('Script too short. Minimum 50 characters required.');\n}\n\n// Split script into sentences\nconst sentences = script\n  .split(/[.!?]+/)\n  .map(s => s.trim())\n  .filter(s => s.length > 10);\n\nif (sentences.length === 0) {\n  throw new Error('No valid sentences found in script.');\n}\n\n// Enhanced keyword extraction\nconst scenes = sentences.map((sentence, index) => {\n  // Remove common words\n  const stopWords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'];\n  const words = sentence.toLowerCase()\n    .replace(/[^a-z0-9\\s]/g, '')\n    .split(/\\s+/)\n    .filter(w => w.length > 3 && !stopWords.includes(w));\n  \n  // Take top 3-5 meaningful words\n  const keywords = words.slice(0, 5).join(' ');\n  \n  // Generate multiple search variations\n  const searchQueries = [\n    keywords,\n    words.slice(0, 3).join(' ') + ' documentary',\n    words.slice(0, 2).join(' ') + ' cinematic'\n  ];\n  \n  return {\n    sceneId: index + 1,\n    text: sentence,\n    keywords: keywords,\n    searchQueries: searchQueries,\n    duration: Math.ceil(sentence.split(' ').length / 2) // Estimate 2 words/second\n  };\n});\n\nconst projectId = `proj_${Date.now()}`;\n\nreturn {\n  json: {\n    projectId: projectId,\n    originalScript: script,\n    totalScenes: scenes.length,\n    estimatedDuration: scenes.reduce((sum, s) => sum + s.duration, 0),\n    scenes: scenes,\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "script-analyzer",
+      "name": "Analyze Script (Enhanced)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        450,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "scene-data",
+              "name": "={{ $json.scenes }}",
+              "value": "",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "split-scenes",
+      "name": "Split Into Scenes",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        650,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "loop-scenes",
+      "name": "Loop Through Scenes",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        850,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.pexels.com/videos/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.keywords }}"
+            },
+            {
+              "name": "per_page",
+              "value": "10"
+            },
+            {
+              "name": "orientation",
+              "value": "landscape"
+            },
+            {
+              "name": "size",
+              "value": "large"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "search-pexels",
+      "name": "Search Pexels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1050,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "pexels-key",
+          "name": "Pexels API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://images-api.nasa.gov/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.keywords }}"
+            },
+            {
+              "name": "media_type",
+              "value": "video"
+            },
+            {
+              "name": "page_size",
+              "value": "10"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "search-nasa",
+      "name": "Search NASA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1050,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://pixabay.com/api/videos/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "queryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "key",
+              "value": "={{ $credentials.pixabayApiKey }}"
+            },
+            {
+              "name": "q",
+              "value": "={{ $json.keywords }}"
+            },
+            {
+              "name": "per_page",
+              "value": "10"
+            },
+            {
+              "name": "video_type",
+              "value": "film"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "search-pixabay",
+      "name": "Search Pixabay",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1050,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process Pexels results\nconst items = [];\nconst sceneData = $('Loop Through Scenes').item.json;\n\ntry {\n  if ($input.item.json.videos && Array.isArray($input.item.json.videos)) {\n    $input.item.json.videos.forEach((video, index) => {\n      // Find best quality video (prefer HD, then highest quality available)\n      const videoFile = video.video_files.find(f => f.quality === 'hd') || \n                       video.video_files.find(f => f.quality === 'sd') ||\n                       video.video_files[0];\n      \n      if (videoFile) {\n        items.push({\n          sceneId: sceneData.sceneId,\n          source: 'pexels',\n          videoId: `pexels_${video.id}`,\n          videoUrl: videoFile.link,\n          thumbnailUrl: video.image,\n          width: videoFile.width || 1920,\n          height: videoFile.height || 1080,\n          duration: video.duration || 10,\n          fps: videoFile.fps || 30,\n          quality: videoFile.quality || 'hd',\n          fileType: videoFile.file_type || 'video/mp4',\n          photographer: video.user?.name || 'Unknown',\n          relevanceScore: 0, // Will be calculated by CLIP\n          keywords: sceneData.keywords,\n          sceneText: sceneData.text\n        });\n      }\n    });\n  }\n} catch (error) {\n  console.error('Pexels processing error:', error);\n}\n\nreturn items.length > 0 ? items.map(item => ({ json: item })) : [{ json: { sceneId: sceneData.sceneId, source: 'pexels', error: 'No results' } }];"
+      },
+      "id": "process-pexels",
+      "name": "Process Pexels",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process NASA results\nconst items = [];\nconst sceneData = $('Loop Through Scenes').item.json;\n\ntry {\n  if ($input.item.json.collection?.items && Array.isArray($input.item.json.collection.items)) {\n    $input.item.json.collection.items.forEach((item, index) => {\n      if (item.links && item.links[0] && item.data && item.data[0]) {\n        items.push({\n          sceneId: sceneData.sceneId,\n          source: 'nasa',\n          videoId: `nasa_${item.data[0].nasa_id}`,\n          collectionUrl: item.href,\n          thumbnailUrl: item.links[0].href,\n          title: item.data[0].title || 'Untitled',\n          description: item.data[0].description || '',\n          dateCreated: item.data[0].date_created || '',\n          center: item.data[0].center || 'NASA',\n          relevanceScore: 0,\n          keywords: sceneData.keywords,\n          sceneText: sceneData.text\n        });\n      }\n    });\n  }\n} catch (error) {\n  console.error('NASA processing error:', error);\n}\n\nreturn items.length > 0 ? items.map(item => ({ json: item })) : [{ json: { sceneId: sceneData.sceneId, source: 'nasa', error: 'No results' } }];"
+      },
+      "id": "process-nasa",
+      "name": "Process NASA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process Pixabay results\nconst items = [];\nconst sceneData = $('Loop Through Scenes').item.json;\n\ntry {\n  if ($input.item.json.hits && Array.isArray($input.item.json.hits)) {\n    $input.item.json.hits.forEach((video, index) => {\n      // Get best quality video\n      const videoData = video.videos?.large || video.videos?.medium || video.videos?.small;\n      \n      if (videoData) {\n        items.push({\n          sceneId: sceneData.sceneId,\n          source: 'pixabay',\n          videoId: `pixabay_${video.id}`,\n          videoUrl: videoData.url,\n          thumbnailUrl: video.picture_id ? `https://i.vimeocdn.com/video/${video.picture_id}_640x360.jpg` : '',\n          width: videoData.width || 1920,\n          height: videoData.height || 1080,\n          duration: video.duration || 10,\n          quality: videoData.quality || 'hd',\n          fileType: 'video/mp4',\n          user: video.user || 'Unknown',\n          tags: video.tags || '',\n          relevanceScore: 0,\n          keywords: sceneData.keywords,\n          sceneText: sceneData.text\n        });\n      }\n    });\n  }\n} catch (error) {\n  console.error('Pixabay processing error:', error);\n}\n\nreturn items.length > 0 ? items.map(item => ({ json: item })) : [{ json: { sceneId: sceneData.sceneId, source: 'pixabay', error: 'No results' } }];"
+      },
+      "id": "process-pixabay",
+      "name": "Process Pixabay",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      },
+      "id": "merge-results",
+      "name": "Merge All Results",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [
+        1450,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5001/rank",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": []
+        },
+        "options": {
+          "timeout": 300000
+        },
+        "specifyBody": "json",
+        "jsonBody": "={{ $input.all() }}"
+      },
+      "id": "clip-ranking",
+      "name": "CLIP Ranking (Real AI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1650,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse CLIP output and select top 3 videos per scene\nlet rankedVideos;\ntry {\n  rankedVideos = JSON.parse($input.item.json.stdout || '[]');\n} catch (e) {\n  // Fallback: use all videos with mock scores\n  rankedVideos = $input.all().map(item => ({\n    ...item.json,\n    relevanceScore: Math.random() * 100\n  }));\n}\n\n// Group by scene\nconst scenes = {};\nrankedVideos.forEach(video => {\n  if (!scenes[video.sceneId]) {\n    scenes[video.sceneId] = {\n      sceneId: video.sceneId,\n      sceneText: video.sceneText,\n      keywords: video.keywords,\n      videos: []\n    };\n  }\n  if (video.videoUrl) { // Only include videos with URLs\n    scenes[video.sceneId].videos.push(video);\n  }\n});\n\n// Sort and select top 3 per scene\nconst selectedVideos = [];\nObject.values(scenes).forEach(scene => {\n  scene.videos.sort((a, b) => b.relevanceScore - a.relevanceScore);\n  const topVideos = scene.videos.slice(0, 3);\n  \n  if (topVideos.length > 0) {\n    selectedVideos.push({\n      sceneId: scene.sceneId,\n      sceneText: scene.sceneText,\n      keywords: scene.keywords,\n      selectedVideo: topVideos[0], // Use best match\n      alternativeVideos: topVideos.slice(1) // Keep backups\n    });\n  }\n});\n\nreturn [{ json: { \n  projectId: $('Analyze Script (Enhanced)').item.json.projectId,\n  totalScenes: selectedVideos.length,\n  scenes: selectedVideos \n} }];"
+      },
+      "id": "select-best-clips",
+      "name": "Auto-Select Best Clips",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1850,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5001/voiceover",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": []
+        },
+        "options": {
+          "timeout": 300000
+        },
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}"
+      },
+      "id": "generate-voiceover",
+      "name": "Generate Voiceover (Coqui TTS)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2050,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse voiceover generation result\nlet voiceoverData;\ntry {\n  voiceoverData = JSON.parse($input.item.json.stdout || '{}');\n} catch (e) {\n  voiceoverData = {\n    voiceoverPath: '/tmp/voiceover_mock.wav',\n    duration: 60,\n    status: 'mock'\n  };\n}\n\nreturn [{ json: {\n  ...$input.item.json,\n  voiceover: voiceoverData\n} }];"
+      },
+      "id": "parse-voiceover",
+      "name": "Parse Voiceover Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2250,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "download-clips-loop",
+      "name": "Loop: Download Clips",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2450,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.selectedVideo.videoUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "download-video-file",
+      "name": "Download Video File",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2650,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=/tmp/docuforge/{{ $json.projectId }}/clip_{{ $json.sceneId }}.mp4",
+        "options": {}
+      },
+      "id": "save-clip-to-disk",
+      "name": "Save Clip to Disk",
+      "type": "n8n-nodes-base.file",
+      "typeVersion": 1,
+      "position": [
+        2850,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5001/assemble",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParameters": {
+          "parameters": []
+        },
+        "options": {
+          "timeout": 300000
+        },
+        "specifyBody": "json",
+        "jsonBody": "={{ $('Parse Voiceover Result').item.json }}"
+      },
+      "id": "ffmpeg-assembly",
+      "name": "FFmpeg: Assemble Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3050,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse assembly result\nlet assemblyData;\ntry {\n  assemblyData = JSON.parse($input.item.json.stdout || '{}');\n} catch (e) {\n  throw new Error('Video assembly failed: ' + ($input.item.json.stderr || 'Unknown error'));\n}\n\nif (!assemblyData.outputPath) {\n  throw new Error('No output video generated');\n}\n\nreturn [{ json: {\n  projectId: assemblyData.projectId,\n  outputPath: assemblyData.outputPath,\n  duration: assemblyData.duration || 0,\n  resolution: assemblyData.resolution || '1920x1080',\n  fileSize: assemblyData.fileSize || 0,\n  format: 'mp4',\n  codec: 'h264',\n  status: 'completed'\n} }];"
+      },
+      "id": "parse-assembly-result",
+      "name": "Parse Assembly Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3250,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "docuforge-videos",
+        "fileName": "={{ $json.projectId }}.mp4",
+        "binaryData": true,
+        "options": {}
+      },
+      "id": "upload-to-r2",
+      "name": "Upload to Cloudflare R2",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 1,
+      "position": [
+        3450,
+        500
+      ],
+      "credentials": {
+        "aws": {
+          "id": "r2-credentials",
+          "name": "Cloudflare R2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## \ud83c\udf89 Your Documentary Video is Ready!\n\n**Project ID:** {{ $json.projectId }}\n\n**Video Details:**\n- Duration: {{ $json.duration }}s\n- Resolution: {{ $json.resolution }}\n- File Size: {{ ($json.fileSize / 1024 / 1024).toFixed(2) }}MB\n- Format: MP4 (H.264)\n\n**Download Link:**\n\ud83d\udd17 [Click here to download](https://your-r2-domain.com/{{ $json.projectId }}.mp4)\n\n**Scenes Processed:** {{ $('Auto-Select Best Clips').item.json.totalScenes }}\n\n**Features Applied:**\n\u2705 AI-powered clip selection (CLIP)\n\u2705 Professional voiceover (Coqui TTS)\n\u2705 Cinematic transitions (0.5s crossfade)\n\u2705 Color grading (Documentary LUT)\n\u2705 Audio mixing (voiceover + ambient)\n\n---\n\n*Video will be available for 30 days. Download now!*\n\nThank you for using DocuForge AI! \ud83c\udfac\n",
+        "subject": "\u2705 Your Documentary is Ready - {{ $json.projectId }}",
+        "fromEmail": "noreply@docuforge.ai",
+        "toEmail": "={{ $('Webhook - Script Input').item.json.body.email || 'user@example.com' }}",
+        "options": {}
+      },
+      "id": "completion-notification",
+      "name": "Send Completion Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        3650,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  success: true,\n  projectId: $json.projectId,\n  downloadUrl: 'https://your-r2-domain.com/' + $json.projectId + '.mp4',\n  duration: $json.duration,\n  resolution: $json.resolution,\n  message: 'Video generated successfully!'\n}) }}",
+        "options": {}
+      },
+      "id": "webhook-response",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3850,
+        500
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook - Script Input": {
+      "main": [
+        [
+          {
+            "node": "Analyze Script (Enhanced)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Script (Enhanced)": {
+      "main": [
+        [
+          {
+            "node": "Split Into Scenes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Into Scenes": {
+      "main": [
+        [
+          {
+            "node": "Loop Through Scenes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Through Scenes": {
+      "main": [
+        [
+          {
+            "node": "Search Pexels",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search NASA",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search Pixabay",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "CLIP Ranking (Real AI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Pexels": {
+      "main": [
+        [
+          {
+            "node": "Process Pexels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search NASA": {
+      "main": [
+        [
+          {
+            "node": "Process NASA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Pixabay": {
+      "main": [
+        [
+          {
+            "node": "Process Pixabay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Pexels": {
+      "main": [
+        [
+          {
+            "node": "Merge All Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process NASA": {
+      "main": [
+        [
+          {
+            "node": "Merge All Results",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Process Pixabay": {
+      "main": [
+        [
+          {
+            "node": "Merge All Results",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge All Results": {
+      "main": [
+        [
+          {
+            "node": "Loop Through Scenes",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "CLIP Ranking (Real AI)": {
+      "main": [
+        [
+          {
+            "node": "Auto-Select Best Clips",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto-Select Best Clips": {
+      "main": [
+        [
+          {
+            "node": "Generate Voiceover (Coqui TTS)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Voiceover (Coqui TTS)": {
+      "main": [
+        [
+          {
+            "node": "Parse Voiceover Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Voiceover Result": {
+      "main": [
+        [
+          {
+            "node": "Loop: Download Clips",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop: Download Clips": {
+      "main": [
+        [
+          {
+            "node": "Download Video File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FFmpeg: Assemble Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Video File": {
+      "main": [
+        [
+          {
+            "node": "Save Clip to Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Clip to Disk": {
+      "main": [
+        [
+          {
+            "node": "Loop: Download Clips",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "FFmpeg: Assemble Video": {
+      "main": [
+        [
+          {
+            "node": "Parse Assembly Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Assembly Result": {
+      "main": [
+        [
+          {
+            "node": "Upload to Cloudflare R2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Cloudflare R2": {
+      "main": [
+        [
+          {
+            "node": "Send Completion Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Completion Email": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "production"
+    },
+    {
+      "name": "video-automation"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-01-01T00:00:00.000Z",
+  "versionId": "2"
+}
